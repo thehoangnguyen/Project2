@@ -1,13 +1,16 @@
 #include <SDL.h>
 #include <SDL_image.h>
+#include <SDL_ttf.h>
 #include <stdio.h>
 #include <string>
-#include <SDL_ttf.h>
+#include <sstream>
 #include <SDL_mixer.h>
 
 using namespace std;
 const int SCREEN_WIDTH = 1200;
 const int SCREEN_HEIGHT = 672;
+int life = 5;
+int score_ = -5;
 
 
 class LTexture
@@ -18,6 +21,11 @@ class LTexture
 		~LTexture();
 
 		bool loadFromFile( std::string path );
+
+#if defined(_SDL_TTF_H) || defined(SDL_TTF_H)
+		//Creates image from font string
+		bool loadFromRenderedText(std::string textureText, SDL_Color textColor);
+#endif
 
 		void free();
 
@@ -44,12 +52,16 @@ class Move
 		static const int AD_VEL = 1;
 
 		Move();
-		void moveboss();
+		void moveboss(SDL_Rect &box, int i);
 		void renderboss();
 		void move();
 		void handleEvent(SDL_Event& e);
 		void render();
-		
+		void setad();
+		void setboss();
+		int getPosX();
+		int getPosY();
+		SDL_Rect box;
 
     private:
 		int mPosX, mPosY;
@@ -61,13 +73,27 @@ class Move
 };
 
 bool checkCollision(SDL_Rect a, SDL_Rect b);
+bool init();
+
+bool loadMedia();
+
+void close();
+
 SDL_Window* gWindow = NULL;
 
 SDL_Renderer* gRenderer = NULL;
 
+TTF_Font* gFont = NULL;
+
+Mix_Chunk* collision = NULL;
+
+LTexture gTimeTextTexture;
 LTexture gFooTexture;
 LTexture boss;
 LTexture gBackgroundTexture;
+LTexture hearts;
+LTexture status;
+LTexture again;
 
 
 LTexture::LTexture()
@@ -115,6 +141,43 @@ bool LTexture::loadFromFile( std::string path )
 	mTexture = newTexture;
 	return mTexture != NULL;
 }
+
+#if defined(_SDL_TTF_H) || defined(SDL_TTF_H)
+bool LTexture::loadFromRenderedText(std::string textureText, SDL_Color textColor)
+{
+	//Get rid of preexisting texture
+	free();
+
+	//Render text surface
+	SDL_Surface* textSurface = TTF_RenderText_Solid(gFont, textureText.c_str(), textColor);
+	if (textSurface != NULL)
+	{
+		//Create texture from surface pixels
+		mTexture = SDL_CreateTextureFromSurface(gRenderer, textSurface);
+		if (mTexture == NULL)
+		{
+			printf("Unable to create texture from rendered text! SDL Error: %s\n", SDL_GetError());
+		}
+		else
+		{
+			//Get image dimensions
+			mWidth = textSurface->w;
+			mHeight = textSurface->h;
+		}
+
+		//Get rid of old surface
+		SDL_FreeSurface(textSurface);
+	}
+	else
+	{
+		printf("Unable to render text surface! SDL_ttf Error: %s\n", TTF_GetError());
+	}
+
+
+	//Return success
+	return mTexture != NULL;
+}
+#endif
 
 void LTexture::free()
 {
@@ -165,7 +228,7 @@ int LTexture::getHeight()
 Move :: Move() 
 {
 	mPosX = 100;
-	mPosY = 20;
+	mPosY = 60;
 
 	mVelX = 0;
 	mVelY = 0;
@@ -176,8 +239,8 @@ Move :: Move()
 	mCollider_boss.w = 100;
 	mCollider_boss.h = 98;
 
-	boss_x = 500;
-	boss_y = 220;
+	boss_x = 0;
+	boss_y = rand() % 560 + 20;
 }
 
 void Move::handleEvent(SDL_Event& e)
@@ -206,10 +269,11 @@ void Move::handleEvent(SDL_Event& e)
 
 void Move::move()
 {
+
 	mPosX += mVelX;
 	mCollider_ad.x = mPosX;
 
-	if ((mPosX < 0) || (mPosX + 100 > SCREEN_WIDTH)|| checkCollision(mCollider_ad, mCollider_boss))
+	if ((mPosX < 0) || (mPosX + 100 > SCREEN_WIDTH))
 	{
 		mPosX -= mVelX;
 		mCollider_ad.x = mPosX;
@@ -218,33 +282,58 @@ void Move::move()
 	mPosY += mVelY;
 	mCollider_ad.y = mPosY;
 
-	if ((mPosY < 0) || (mPosY + 70 > SCREEN_HEIGHT)|| checkCollision(mCollider_ad, mCollider_boss))
+	if ((mPosY < 0) || (mPosY + 70 > SCREEN_HEIGHT))
 	{
 		mPosY -= mVelY;
 		mCollider_ad.y = mPosY;
 	}
+
 }
 
 void Move::render ()
 {
 	gFooTexture.render( mPosX, mPosY );
 }
-
-
-void Move :: moveboss ()
-{
-	//boss_x--;
-	mCollider_boss.x = boss_x;
-	mCollider_boss.y = boss_y;
-	//if (boss_x <= 0 ) {
-		//boss_x = 1200;
-		//mCollider_boss.x = boss_x;
-		//boss_y = rand() % 580 + 20;
-		//mCollider_boss.y = boss_y;
-	//}
+int Move::getPosX() {
+	return mCollider_ad.x;
+}
+int Move::getPosY() {
+	return mCollider_ad.y;
 }
 
+void Move :: moveboss (SDL_Rect &box, int i)
+{
+	boss_x--;
+	mCollider_boss.x = boss_x;
+	mCollider_boss.y = boss_y;
+	if (checkCollision(box, mCollider_boss)) {
+		boss_x = 0;
+		boss_y = 0;
+		mCollider_boss.x = boss_x;
+		mCollider_boss.y = boss_y;
 
+		Mix_PlayChannel(-1,collision, 0);
+
+		life--;
+	}
+	
+	if (boss_x <= 0 ) {
+		boss_x = 1200+i*300;
+		mCollider_boss.x = boss_x;
+		boss_y = rand() % 560 + 20;
+		mCollider_boss.y = boss_y;
+		score_++;
+	}
+}
+
+void Move::setad() {
+	mPosX = 100;
+	mPosY = 60;
+}
+void Move::setboss() {
+	boss_x = 0;
+	boss_y = rand() % 560 + 20;
+}
 void Move :: renderboss ()
 {
 	boss.render(boss_x, boss_y);
@@ -290,6 +379,16 @@ bool init()
 					printf( "SDL_image could not initialize! SDL_image Error: %s\n", IMG_GetError() );
 					success = false;
 				}
+				if (TTF_Init() == -1)
+				{
+					printf("SDL_ttf could not initialize! SDL_ttf Error: %s\n", TTF_GetError());
+					success = false;
+				}
+				if (Mix_OpenAudio(44100, MIX_DEFAULT_FORMAT, 2, 2048) < 0)
+				{
+					printf("SDL_mixer could not initialize! SDL_mixer Error: %s\n", Mix_GetError());
+					success = false;
+				}
 			}
 		}
 	}
@@ -302,7 +401,7 @@ bool loadMedia()
 	bool success = true;
 	if( !gFooTexture.loadFromFile( "spaceship01.png" ) )
 	{
-		printf( "Failed to load Foo' texture image!\n" );
+		printf( "Failed to load AD texture image!\n" );
 		success = false;
 	}
 
@@ -313,9 +412,34 @@ bool loadMedia()
 	}
 	if ( !boss.loadFromFile("skeleton-fly_03.png") )
 	{
-		printf("Failed to load background texture image!\n");
+		printf("Failed to load boss texture image!\n");
 		success = false;
 	}
+	if (!hearts.loadFromFile("hearts.png"))
+	{
+		printf("Failed to load hearts texture image!\n");
+		success = false;
+	}
+	if (!status.loadFromFile("set.png"))
+	{
+		printf("Failed to load status texture image!\n");
+		success = false;
+	}
+	if (!again.loadFromFile("continue.png"))
+	{
+		printf("Failed to load status texture image!\n");
+		success = false;
+	}
+
+	collision = Mix_LoadWAV("scratch.wav");
+	if (collision == NULL)
+	{
+		printf("Failed to load collision sound effect! SDL_mixer Error: %s\n", Mix_GetError());
+		success = false;
+	}
+
+	gFont = TTF_OpenFont("lazy.ttf", 28);
+	SDL_Color textColor = { 0, 0, 0, 255 };
 
 	return success;
 }
@@ -325,6 +449,13 @@ void close()
 	gFooTexture.free();
 	gBackgroundTexture.free();
 	boss.free();
+	gTimeTextTexture.free();
+
+	TTF_CloseFont(gFont);
+	gFont = NULL;
+
+	Mix_FreeChunk(collision);
+	collision = NULL;
 
 	SDL_DestroyRenderer( gRenderer );
 	SDL_DestroyWindow( gWindow );
@@ -333,6 +464,8 @@ void close()
 
 	IMG_Quit();
 	SDL_Quit();
+	TTF_Quit();
+	Mix_Quit();
 }
 bool checkCollision(SDL_Rect a, SDL_Rect b)
 {
@@ -397,8 +530,13 @@ int main( int argc, char* args[] )
 
 			SDL_Event e;
 			Move ad;
-			Move boss;
+			Move boss[5];
 			int scrollingOffset = 0;
+			SDL_Color textColor = { 0, 0, 0, 255 };
+			
+			Uint32 startTime = 0;
+
+			std::stringstream timeText;
 			while( !quit )
 			{
 				while( SDL_PollEvent( &e ) != 0 )
@@ -409,22 +547,58 @@ int main( int argc, char* args[] )
 					}
 					ad.handleEvent(e);
 				}
-				//ad.move();
-				boss.moveboss();
 				ad.move();
+				SDL_Rect box;
+				box.x = ad.getPosX();
+				box.y = ad.getPosY();
+				box.h = 40;
+				box.w = 100;
+
+				timeText.str("");
+				//timeText << "SCORE: " << (SDL_GetTicks() - startTime) / 1000;
+				timeText << "SCORE: " << score_;
+
+				if (!gTimeTextTexture.loadFromRenderedText(timeText.str().c_str(), textColor))
+				{
+					printf("Unable to render time texture!\n");
+				}
+
 				--scrollingOffset;
 				if( scrollingOffset < -gBackgroundTexture.getWidth() )
 				{
 					scrollingOffset = 0;
 				}
+
 				SDL_SetRenderDrawColor( gRenderer, 0xFF, 0xFF, 0xFF, 0xFF);
 				SDL_RenderClear( gRenderer );
 
 				gBackgroundTexture.render( scrollingOffset, 0 );
-				gBackgroundTexture.render( scrollingOffset + gBackgroundTexture.getWidth(), 0 );							
-				
+				gBackgroundTexture.render( scrollingOffset + gBackgroundTexture.getWidth(), 0 );
+
+				gTimeTextTexture.render(550, 5);
 				ad.render();
-				boss.renderboss();
+				for (int i = 0; i < 5; i++) {
+					boss[i].moveboss(box, i);
+					boss[i].renderboss();
+
+				}
+				for (int i = 1; i <=life; i++) {
+					hearts.render(30 *i, 20);
+				}
+				if (life <= 0) {
+					status.render(200, 200);
+					again.render(290, 400);
+					SDL_Delay(100);
+					if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_RETURN)
+					{
+							life = 5;
+							for (int i = 0; i < 5; i++) {
+								boss[i].setboss();
+								ad.setad();
+							}
+							score_ = -5;
+					}
+				}
 				SDL_RenderPresent( gRenderer );
 			}
 		}
